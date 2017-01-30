@@ -23,20 +23,21 @@ type SsdpData struct {
 }
 
 var ssdpData chan SsdpData
-var timeout chan bool
+var done chan bool
 
 func main() {
-	timeout := make(chan bool, 1)
+	done = make(chan bool, 1)
 	ssdpData = make(chan SsdpData)
 
 	go ssdpMulticast()
 
+loop:
 	for {
 		select {
 		case msg := <-ssdpData:
 			fmt.Println(msg.Data)
-		case <-timeout:
-			break
+		case <-done:
+			break loop
 		}
 	}
 }
@@ -45,13 +46,8 @@ func ssdpMulticast() {
 	addr, _ := net.ResolveUDPAddr(UDP, SsdpPort)
 
 	conn, _ := net.ListenUDP(UDP, addr)
-	conn.SetReadDeadline(time.Now().Add(time.Second * 30))
+	conn.SetReadDeadline(time.Now().Add(time.Second * 5))
 	defer conn.Close()
-	defer func() {
-		if err := recover(); err != nil {
-			timeout <- true
-		}
-	}()
 
 	mcastaddr, _ := net.ResolveUDPAddr(UDP, Multicast)
 	msg := buildMulticastDiscoveryPackage()
@@ -59,7 +55,11 @@ func ssdpMulticast() {
 
 	for {
 		buf := make([]byte, 4096)
-		_, addr, _ := conn.ReadFromUDP(buf)
+		_, addr, err := conn.ReadFromUDP(buf)
+		if err, ok := err.(net.Error); ok && err.Timeout() {
+			done <- true
+			break
+		}
 		ssdpData <- SsdpData{addr.IP, string(buf)}
 	}
 }
